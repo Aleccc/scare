@@ -29,7 +29,7 @@ def get_distinct_gas_south_premises(year, month):
 # select reads from only Gas South customers
 # =============================================================================
 @timer
-def get_reads_for_gas_south_customers(year, month, year_prior=False, return_clean=True):
+def get_reads_for_gas_south_customers_on_premise(year, month, year_prior=False, return_clean=True):
     """ get reads for Gas South customers in current FDCG.
     If year_prior == True: keep fdcg_year current, and lag AGL year by one year.
 
@@ -42,7 +42,44 @@ def get_reads_for_gas_south_customers(year, month, year_prior=False, return_clea
     sql = ("SELECT DISTINCT FDCG.AGLAccountNumber , FDCG.AGLServiceLocationNumber , AGL_CD. * "
            "FROM [EDW].[dbo].[D_FDCG_Customers] FDCG "
            "LEFT JOIN[GSDWSTG].[dbo].[FM_MM_AGL_CD_{year}] AGL_CD "
-           "ON AGL_CD.AGL_Account_Number = FDCG.AGLAccountNumber AND AGL_CD.YearMonth = '{year}{month:02d}' "
+           "ON SUBSTRING(AGL_CD.AGL_Premise_Number, "
+           "PATINDEX('%[^0]%', AGL_CD.AGL_Premise_Number+'.'), LEN(AGL_CD.AGL_Premise_Number)) "
+           "= SUBSTRING(FDCG.AGLServiceLocationNumber, "
+           "PATINDEX('%[^0]%', FDCG.AGLServiceLocationNumber+'.'), LEN(FDCG.AGLServiceLocationNumber)) "
+           "AND AGL_CD.YearMonth = '{year}{month:02d}' "
+           "WHERE FDCG.BillMonth = '{fdcg_year}{month:02d}' "
+           .format(fdcg_year=fdcg_year, year=year, month=month)
+           )
+    df = dw_stg.query(sql)
+    dw_stg.close()
+    if return_clean:
+        df = clean(df)
+    return df
+
+
+# =============================================================================
+# select reads from only Gas South customers by AGL Account Number
+# first has to strip any leading zeros from agl_account_number
+# =============================================================================
+@timer
+def get_reads_for_gas_south_customers_on_account(year, month, year_prior=False, return_clean=True):
+    """ get reads for Gas South customers in current FDCG.
+    If year_prior == True: keep fdcg_year current, and lag AGL year by one year.
+
+    SQL cred to Nicolas Merino."""
+
+    fdcg_year = year
+    if year_prior:
+        year -= 1
+    dw_stg.connect()
+    sql = ("SELECT DISTINCT FDCG.AGLAccountNumber , FDCG.AGLServiceLocationNumber , AGL_CD. * "
+           "FROM [EDW].[dbo].[D_FDCG_Customers] FDCG "
+           "LEFT JOIN[GSDWSTG].[dbo].[FM_MM_AGL_CD_{year}] AGL_CD "
+           "ON SUBSTRING(AGL_CD.AGL_Account_Number, "
+           "PATINDEX('%[^0]%', AGL_CD.AGL_Account_Number+'.'), LEN(AGL_CD.AGL_Account_Number)) "
+           "= SUBSTRING(FDCG.AGLAccountNumber, "
+           "PATINDEX('%[^0]%', FDCG.AGLAccountNumber+'.'), LEN(FDCG.AGLAccountNumber)) "
+           "AND AGL_CD.YearMonth = '{year}{month:02d}' "
            "WHERE FDCG.BillMonth = '{fdcg_year}{month:02d}' "
            .format(fdcg_year=fdcg_year, year=year, month=month)
            )
@@ -98,6 +135,8 @@ def clean(df_query):
     # =========================================================================
     # change data type for columns; add columns; remove na rows
     # =========================================================================
+    df.agl_account_number = pd.to_numeric(df.agl_account_number, errors='coerce')
+    df.agl_premise_number = pd.to_numeric(df.agl_premise_number, errors='coerce')
     df.ccf = pd.to_numeric(df.ccf, errors='coerce')
     df.design_day_usage_dathm = pd.to_numeric(df.design_day_usage_dathm, errors='coerce')
     df.design_day_usage_mcf = pd.to_numeric(df.design_day_usage_mcf, errors='coerce')

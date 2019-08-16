@@ -10,9 +10,13 @@ MONTH = 8
 
 @timer
 def retrieve_reads():
-    """Return two years worth of meter reads for only Gas South customers."""
-    reads = query_premises.get_reads_for_gas_south_customers(YEAR, MONTH)
-    reads = reads.append(query_premises.get_reads_for_gas_south_customers(YEAR, MONTH, year_prior=True))
+    """Return two years worth of meter reads for only Gas South customers.
+    get_reads_for_gas_south_customers time: 90.17sec
+    get_reads_for_gas_south_customers time: 82.91sec (year_prior=True)
+    reads.to_csv time: 123.16sec
+    """
+    reads = query_premises.get_reads_for_gas_south_customers_on_premise(YEAR, MONTH)
+    reads = reads.append(query_premises.get_reads_for_gas_south_customers_on_premise(YEAR, MONTH, year_prior=True))
     # # export as csv
     # reads.to_csv('reads.csv', index=False)
     reads = reads.reset_index(drop=True)
@@ -21,6 +25,7 @@ def retrieve_reads():
 
 @timer
 def retrieve_weather_and_clean(update_weather=False):
+    """retrieve_weather_and_clean time: 0.08sec"""
     weather = get_data(update_weather=update_weather)
     weather = pd.DataFrame.from_dict(weather)
     weather.DATE = pd.to_datetime(weather.DATE, format='%Y-%m-%d')
@@ -34,7 +39,7 @@ def retrieve_weather_and_clean(update_weather=False):
 
 
 @timer
-def calculate_results(reads, weather, piecewise=True, group_by='agl_premise_number'):
+def calculate_results(reads, weather, piecewise, group_by='agl_premise_number'):
     return reads.groupby(group_by).apply(lambda x: scare_result(weather=weather, df=x, piecewise=piecewise))
 
 
@@ -53,17 +58,18 @@ def main():
     reads = reads.rename(columns={'ccf': 'UsgCCF',
                                   'begin_date': 'StartDate',
                                   'end_date': 'EndDate'})
-    grouped_results = calculate_results(reads, weather, group_by='agl_premise_number')
+    grouped_results = calculate_results(reads, weather, piecewise=True, group_by='agl_premise_number')
     df = pivot_table(grouped_results)
     return df
 
 
 def test():
     weather = retrieve_weather_and_clean()
-    gas_south_premises = query_premises.get_distinct_gas_south_premises(YEAR, MONTH)
-    reads = pd.read_csv('test.csv')
-    reads = reads.merge(gas_south_premises, how='inner',
-                        left_on='agl_premise_number', right_on='aglservicelocationnumber')
+    # reads = retrieve_reads()
+    reads = pd.read_csv('reads.csv')
+    nic = pd.read_csv('nic.csv')
+    nic.agl_premise_number = pd.to_numeric(nic.agl_premise_number)
+    reads.agl_premise_number = pd.to_numeric(reads.agl_premise_number)
     reads.begin_date = pd.to_datetime(reads.begin_date)
     reads.end_date = pd.to_datetime(reads.end_date)
     reads.ccf = pd.to_numeric(reads.ccf)
@@ -71,6 +77,13 @@ def test():
                                   'begin_date': 'StartDate',
                                   'end_date': 'EndDate'})
 
-    grouped_results = calculate_results(reads, weather, group_by='agl_premise_number')
-    grouped_results.to_csv('test_results.csv')
-    return grouped_results
+    these = reads.merge(nic, left_on='agl_premise_number', right_on='agl_premise_number')
+    grouped_results = calculate_results(these, weather, piecewise=True, group_by='agl_premise_number')
+    df = pivot_table(grouped_results)
+    return df
+
+
+# res = test()
+# res.to_csv('for_nic2.csv')
+real = main()
+real.to_csv('second_full_run.csv')

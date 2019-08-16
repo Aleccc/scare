@@ -58,15 +58,31 @@ class SCARE:
         Sum each by month: usage, HDDs, and days.
         Include new column 'month' to indicate month (e.g. Jan = 1).
 
-                         dth  TMAX  TMIN  HDD  days   year  month
-        2019-05-31  2.724480  1917  1493  3.5    22  44418      5
-        2019-06-30  2.485341  2582  2081  0.0    30  60570      6
-        2019-07-31  0.156579   188   149  0.0     2   4038      7
+                  dathm  HDD  days
+        month
+        5      2.724480  3.5    22
+        6      2.113821  0.0    27
+        6      0.371520  0.0     3
+        7      0.156579  0.0     2
         """
-        daily = pd.DataFrame(self.usage_daily, columns=['dth'])
+        daily = pd.DataFrame(self.usage_daily, columns=['dathm'])
         merged = daily.merge(self.weather_daily, left_index=True, right_index=True)
-        monthly = merged.resample('M').sum()  # 'M' = monthly
-        monthly['month'] = monthly.index.month  # Jan=1, Feb=2,...
+        # gripm equally weights averages of two meter reads for one month
+        # e.g. read A has daily average of 4 dathm per day and contains two days in February,
+        #      read B has daily average of 16 dathm per day and contains 26 days in February,
+        #      the response to HDD from two reads will equally affect the regression.
+        group = merged.groupby([merged.index.month, merged.dathm])
+        monthly = group.agg({'dathm': 'sum',
+                             'HDD': 'sum',
+                             'days': 'sum'})
+        # reset the first level ('month') so that it becomes it's own column
+        # then drop the remaining index (the 'dathm' we grouped by)
+        # then rename the 'month' from the default 'level_0'
+        # then set 'month' as the index
+        monthly = monthly.reset_index(level=0)\
+            .reset_index(drop=True)\
+            .rename(columns={'level_0': 'month'})\
+            .set_index('month')
         return monthly
 
     def _weather2monthly(self):
@@ -95,14 +111,14 @@ class SCARE:
         weather_monthly.index.names = ['Year', 'Month']
         return weather_monthly
 
-    def piecewise(self, gripm=False):
+    def piecewise(self, gripm=True):
         """Piecewise Regression that segments different months"""
         # do four regressions with the following segmented months
         if gripm:
             segments = [[12, 1, 2],   # Dec-Feb
                         [2, 3, 4],    # Feb-Apr
                         [4, 10, 11],  # Apr,Oct,Nov
-                        [5, 6, 9]]    # May,Jun,Sep
+                        [4, 5, 6, 9]]    # May,Jun,Sep
             # assign the results of above segments to the following months
             assigns = [[12, 1, 2],
                        [3],
@@ -120,8 +136,8 @@ class SCARE:
                        [5, 6, 7, 8, 9]]  # 7 and 8 replaced with actual daily averages
         prediction = pd.DataFrame()
         for i in range(4):
-            seg = self.usage_monthly.index.month.isin(segments[i])
-            lm = smf.ols("dth~HDD+days+0", data=self.usage_monthly[seg]).fit()
+            seg = self.usage_monthly.index.isin(segments[i])
+            lm = smf.ols("dathm~HDD+days+0", data=self.usage_monthly[seg]).fit()
             # lm.summary()
             seg_weather = self.weather_monthly.index.get_level_values("Month").isin(assigns[i])
             segment_prediction = lm.predict(self.weather_monthly[seg_weather])
@@ -133,55 +149,67 @@ class SCARE:
 
     def simple(self):
         """Simple Regression on HDDs and days"""
-        lm = smf.ols("dth~HDD+days+0", data=self.usage_monthly).fit()
+        lm = smf.ols("dathm~HDD+days+0", data=self.usage_monthly).fit()
         # lm.summary()
         prediction = lm.predict(self.weather_monthly)
         prediction = pd.DataFrame(prediction, columns=["dathm"])
         prediction.loc[prediction.dathm < 0, 'dathm'] = 0  # set negative predictions to zero
         return prediction
 
+    def billing_averages(self):
+        billing_daily = self.usage_monthly.dathm / self.usage_monthly.days
+        days_in_months = pd.DataFrame(index=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+                                      data=[31, 28.25, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31],
+                                      columns=['Normalized'])
+        billing_average = pd.DataFrame(index=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+                                       data=billing_daily.groupby('month').mean(),
+                                       columns=['Normalized']) * days_in_months
+        billing_average = billing_average.fillna(0)  # replaces any missing months with zero
+        # TODO: instead of filling with zero, give a generic full shape
+        return billing_average
 
-def statistics(predictions, num_years=10, plot=False):
-    """Print the monthly Average, Standard Deviation, and Skewness
-    across the recent requested number of years (num_years)"""
-    years = range(predictions.index.max()[0]-num_years,
-                  predictions.index.max()[0]-1)
-    stats = predictions.loc[years].groupby(level=1).mean()
+
+def statistics(predictions, trailing_months=120, plot=False):
+    """Print the monthly Average across the recent requested number of months.
+    Will use the most recent months available, excluding current since incomplete"""
+    month_start = (trailing_months+1) * (-1)
+    month_end = -1  # do not include current month, since not complete
+    stats = predictions.iloc[month_start:month_end].groupby(level=1).mean()
     stats = stats.rename(columns={"dathm": "Normalized"})
-    # stats['std'] = predictions.loc[years].groupby(level=1).std()
-    # stats['skew'] = predictions.loc[years].groupby(level=1).skew()
-    # if plot:
-    #     stats.Normalized.plot(title="%d-Year Normalized Average" % num_years,
-    #                           legend=True, years=num_years)
-    #     print(stats)
     return stats
 
 
-def scare_result(weather, df, piecewise=True):
+def scare_result(weather, df, piecewise):
     obj = SCARE(weather, df=df)
     try:
+        using_billing = False
         if piecewise:
             prediction = obj.piecewise()
         else:
             prediction = obj.simple()
         # Statistics of recent 10 years
-        stats = statistics(prediction, num_years=10)
+        stats = statistics(prediction, trailing_months=120)
         if piecewise:
             # Pricing model replaces July (7) and August (8) with actual daily average
             chg = obj.usage_daily
             new = chg[(chg.index.month == 7) | (chg.index.month == 8)].mean()*31
             stats.loc[7, 'Normalized'] = new
             stats.loc[8, 'Normalized'] = new
-    except:
-        billing_average = pd.DataFrame(index=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
-                                       data=obj.usage_monthly.groupby('month').dth.mean())
-        billing_average = billing_average.rename(columns={'dth': 'Normalized'})
-        billing_average = billing_average.fillna(0)  # replaces any missing months with zero
-        # TODO: instead of filling with zero, give a generic full shape
-        stats = billing_average
+        billing_annual_sum = obj.billing_averages().sum().iloc[0]
+        prediction_annual_sum = stats.Normalized.sum()
+        if 0.3 < abs(1-(billing_annual_sum/prediction_annual_sum)):
+            # if the absolute difference between the prediction and billing loads
+            # are greater than 30%, then use the billing load
+            stats = obj.billing_averages()
+            using_billing = True
+    except:  # ValueError or AttributeError
+        stats = obj.billing_averages()
+        using_billing = True
 
-    checks = pd.DataFrame.from_dict({'check': ['test1', 'test2', 'test3'],
-                                     'Normalized': [test_one(stats), test_two(stats), test_three(stats)],
+    checks = pd.DataFrame.from_dict({'check': ['test1', 'test2', 'test3',
+                                               'using_billing', 'read_count'],
+                                     'Normalized': [test_one(stats), test_two(stats), test_three(stats),
+                                                    using_billing, len(df)],
                                      })
     checks = checks.set_index('check')
     stats = stats.append(checks)
