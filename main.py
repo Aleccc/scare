@@ -54,7 +54,7 @@ def pivot_table(df):
 @timer
 def main():
     reads = retrieve_reads()
-    weather = retrieve_weather_and_clean(update_weather=True)
+    weather = retrieve_weather_and_clean(update_weather=False)
     reads = reads.rename(columns={'ccf': 'UsgCCF',
                                   'begin_date': 'StartDate',
                                   'end_date': 'EndDate'})

@@ -1,8 +1,12 @@
 def test_one(stats):
     """top two months must be less than 75% of annual load"""
-    sum_top_two = stats.Normalized.nlargest(2).sum()
-    sum_annual = stats.Normalized.sum()
-    return 0.75 > (sum_top_two/sum_annual)
+    try:
+        sum_top_two = stats.Normalized.nlargest(2).sum()
+        sum_annual = stats.Normalized.sum()
+        result = 0.75 > (sum_top_two/sum_annual)
+    except TypeError:
+        result = False
+    return result
 
 
 def test_two(stats):

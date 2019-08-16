@@ -14,7 +14,7 @@ import requests
 
 STATIC_WEATHER = os.path.join('weather', 'static', 'weather.csv')
 STR_FORMAT = '%Y-%m-%d'
-START = '1999-01-01'
+START = '1991-12-01'
 END = datetime.datetime.today().strftime(STR_FORMAT)
 STATIONS = ['USW00013874',  # ATL (&SNG)
             ]
@@ -63,19 +63,27 @@ def append_data(response):
         writer = csv.DictWriter(f, fieldnames)
         if first_time:
             writer.writeheader()
-        writer.writerows(response.json())
+        writer.writerows(response)
 
 
 def get_data(update_weather=False):
     data = get_static_data()
     if update_weather:
-        latest_date = max_date(data)
-        if latest_date >= END:
-            return data
-        else:
-            global START
-            if latest_date:  # in case latest_date == None
+        try:
+            latest_date = max_date(data)
+        except TypeError:  # file is empty
+            latest_date = None
+        if latest_date:
+            if latest_date >= END:
+                return data
+            else:
+                global START
                 START = add_one_day(latest_date)
-            call_api()
+                json_response = call_api()
+                append_data(json_response)
+                data = get_static_data()
+        else:
+            json_response = call_api()
+            append_data(json_response)
             data = get_static_data()
     return data

@@ -128,11 +128,11 @@ class SCARE:
             segments = [[1, 2],        # Jan, Feb
                         [3, 4],        # Mar, Apr
                         [10, 11, 12],  # Oct-Dec
-                        [5, 6, 9]]     # May, Jun, Sep
+                        [4, 5, 6, 9]]     # May, Jun, Sep
             # assign the results of above segments to the following months
             assigns = [[12, 1, 2],
-                       [3, 4],
-                       [10, 11],
+                       [3, ],
+                       [4, 10, 11],
                        [5, 6, 7, 8, 9]]  # 7 and 8 replaced with actual daily averages
         prediction = pd.DataFrame()
         for i in range(4):
@@ -180,31 +180,35 @@ def statistics(predictions, trailing_months=120, plot=False):
 
 
 def scare_result(weather, df, piecewise):
-    obj = SCARE(weather, df=df)
-    try:
-        using_billing = False
-        if piecewise:
-            prediction = obj.piecewise()
-        else:
-            prediction = obj.simple()
-        # Statistics of recent 10 years
-        stats = statistics(prediction, trailing_months=120)
-        if piecewise:
-            # Pricing model replaces July (7) and August (8) with actual daily average
-            chg = obj.usage_daily
-            new = chg[(chg.index.month == 7) | (chg.index.month == 8)].mean()*31
-            stats.loc[7, 'Normalized'] = new
-            stats.loc[8, 'Normalized'] = new
-        billing_annual_sum = obj.billing_averages().sum().iloc[0]
-        prediction_annual_sum = stats.Normalized.sum()
-        if 0.3 < abs(1-(billing_annual_sum/prediction_annual_sum)):
-            # if the absolute difference between the prediction and billing loads
-            # are greater than 30%, then use the billing load
+    using_billing = False
+    total_days_of_reads = (df.EndDate - df.StartDate).sum().days
+    if total_days_of_reads == 0:
+        stats = pd.DataFrame.from_dict({'Normalized': [None, ]})
+    else:
+        obj = SCARE(weather, df=df)
+        try:
+            if piecewise:
+                prediction = obj.piecewise()
+            else:
+                prediction = obj.simple()
+            # Statistics of recent 10 years
+            stats = statistics(prediction, trailing_months=120)
+            if piecewise:
+                # Pricing model replaces July (7) and August (8) with actual daily average
+                chg = obj.usage_daily
+                new = chg[(chg.index.month == 7) | (chg.index.month == 8)].mean()*31
+                stats.loc[7, 'Normalized'] = new
+                stats.loc[8, 'Normalized'] = new
+            billing_annual_sum = obj.billing_averages().sum().iloc[0]
+            prediction_annual_sum = stats.Normalized.sum()
+            if 0.3 < abs(1-(billing_annual_sum/prediction_annual_sum)):
+                # if the absolute difference between the prediction and billing loads
+                # are greater than 30%, then use the billing load
+                stats = obj.billing_averages()
+                using_billing = True
+        except ValueError:
             stats = obj.billing_averages()
             using_billing = True
-    except:  # ValueError or AttributeError
-        stats = obj.billing_averages()
-        using_billing = True
 
     checks = pd.DataFrame.from_dict({'check': ['test1', 'test2', 'test3',
                                                'using_billing', 'read_count'],
