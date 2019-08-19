@@ -47,7 +47,7 @@ class SCARE:
         full = pd.Series()
         for i in range(len(self.df)):
             index = pd.date_range(self.df.StartDate.iloc[i],
-                                  self.df.EndDate.iloc[i]-timedelta(1))
+                                  self.df.EndDate.iloc[i])  # -timedelta(1))
             series = pd.Series(1, index=index)  # assign each day a value of 1
             daily_avg_dathm = self.df.UsgDTH.iloc[i]/series.sum()
             full = full.append(series*daily_avg_dathm)
@@ -67,6 +67,7 @@ class SCARE:
         """
         daily = pd.DataFrame(self.usage_daily, columns=['dathm'])
         merged = daily.merge(self.weather_daily, left_index=True, right_index=True)
+        merged.iloc[0]
         # gripm equally weights averages of two meter reads for one month
         # e.g. read A has daily average of 4 dathm per day and contains two days in February,
         #      read B has daily average of 16 dathm per day and contains 26 days in February,
@@ -111,10 +112,10 @@ class SCARE:
         weather_monthly.index.names = ['Year', 'Month']
         return weather_monthly
 
-    def piecewise(self, gripm=True):
+    def piecewise(self, regression_type='two_piece'):
         """Piecewise Regression that segments different months"""
         # do four regressions with the following segmented months
-        if gripm:
+        if regression_type == 'gripm':
             segments = [[12, 1, 2],   # Dec-Feb
                         [2, 3, 4],    # Feb-Apr
                         [4, 10, 11],  # Apr,Oct,Nov
@@ -124,8 +125,13 @@ class SCARE:
                        [3],
                        [4, 10, 11],
                        [5, 6, 7, 8, 9]]  # 7 and 8 replaced with actual daily averages
+        elif regression_type == 'two_piece':
+            segments = [[1, 2, 3, 4, 10, 11, 12],
+                        [5, 6, 7, 8, 9]]
+            # assign the results of above segments to the following months
+            assigns = segments
         else:
-            segments = [[1, 2],        # Jan, Feb
+            segments = [[12, 1, 2],        # Jan, Feb
                         [3, 4],        # Mar, Apr
                         [10, 11, 12],  # Oct-Dec
                         [4, 5, 6, 9]]     # May, Jun, Sep
@@ -135,7 +141,7 @@ class SCARE:
                        [4, 10, 11],
                        [5, 6, 7, 8, 9]]  # 7 and 8 replaced with actual daily averages
         prediction = pd.DataFrame()
-        for i in range(4):
+        for i in range(len(segments)):
             seg = self.usage_monthly.index.isin(segments[i])
             lm = smf.ols("dathm~HDD+days+0", data=self.usage_monthly[seg]).fit()
             # lm.summary()

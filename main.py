@@ -52,18 +52,18 @@ def pivot_table(df):
 
 
 @timer
-def main():
+def main(piecewise):
     reads = retrieve_reads()
     weather = retrieve_weather_and_clean(update_weather=False)
     reads = reads.rename(columns={'ccf': 'UsgCCF',
                                   'begin_date': 'StartDate',
                                   'end_date': 'EndDate'})
-    grouped_results = calculate_results(reads, weather, piecewise=True, group_by='agl_premise_number')
+    grouped_results = calculate_results(reads, weather, piecewise=piecewise, group_by='agl_premise_number')
     df = pivot_table(grouped_results)
     return df
 
 
-def test():
+def test(piecewise):
     weather = retrieve_weather_and_clean()
     # reads = retrieve_reads()
     reads = pd.read_csv('reads.csv')
@@ -78,12 +78,12 @@ def test():
                                   'end_date': 'EndDate'})
 
     these = reads.merge(nic, left_on='agl_premise_number', right_on='agl_premise_number')
-    grouped_results = calculate_results(these, weather, piecewise=True, group_by='agl_premise_number')
+    grouped_results = calculate_results(these, weather, piecewise=piecewise, group_by='agl_premise_number')
     df = pivot_table(grouped_results)
     return df
 
 
-# res = test()
-# res.to_csv('for_nic2.csv')
-real = main()
-real.to_csv('second_full_run.csv')
+# res = test(piecewise=True)
+# res.to_csv('for_nic6.csv')
+real = main(True)
+real.to_csv('two_piece_full_run.csv')
