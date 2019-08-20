@@ -4,6 +4,7 @@ Created on Fri Jun 22 11:27:33 2018
 
 @author: gas01409
 """
+import logging
 from datetime import timedelta
 import pandas as pd
 import statsmodels.formula.api as smf
@@ -26,68 +27,95 @@ class SCARE:
     def __init__(self, weather, df):
         self.weather_daily = weather
         self.df = df
+        self.trailing_months = 120  # for predictions (aka 10-year)
         pool = df.delivery_group.iloc[0]
         self.df['UsgDTH'] = self.df.UsgCCF * BTU_FACTOR[pool] / 10
         self.weather_monthly = self._weather2monthly()
         self.usage_daily = self._convert_usage2daily()
         self.usage_monthly = self._calendarize()
+        self.summer_base_load_per_day = self._calculate_base_load()
+        # adjust the consumption
+        self.adjusted_usage_monthly = self._adjust_consumption()
 
     def _convert_usage2daily(self):
-        """Create a series that indexes off of daily reads, assigning average
+        """Create a dataframe that indexes off of daily reads, assigning average
         dathm to each day between the StartDate and EndDate of the ReadMonth.
 
-        2019-05-29    0.12384
-        2019-05-30    0.12384
-        2019-05-31    0.12384
-        2019-06-01    0.12384
-        2019-06-02    0.12384
-        2019-06-03    0.12384
-        dtype: float64
+                    meter_read     dathm
+        2019-06-13           0  0.419250
+        2019-06-14           0  0.419250
+        2019-06-15           0  0.419250
+        2019-06-16           0  0.419250
+        2019-06-17           0  0.419250
         """
-        full = pd.Series()
+        full = pd.DataFrame()
         for i in range(len(self.df)):
+            # create index of daily date range, excluding end date
             index = pd.date_range(self.df.StartDate.iloc[i],
-                                  self.df.EndDate.iloc[i])  # -timedelta(1))
-            series = pd.Series(1, index=index)  # assign each day a value of 1
-            daily_avg_dathm = self.df.UsgDTH.iloc[i]/series.sum()
-            full = full.append(series*daily_avg_dathm)
-        return full
+                                  self.df.EndDate.iloc[i] - timedelta(1))
+            meter_read = pd.Series(i, index=index)
+            days_in_read = meter_read.count()
+            dathm_in_read = self.df.UsgDTH.iloc[i]
+            daily_avg_dathm = dathm_in_read/days_in_read
+            temp = pd.DataFrame(meter_read, columns=['meter_read'])
+            temp['dathm'] = daily_avg_dathm
+            full = full.append(temp)
+        return full  # DataFrame
 
     def _calendarize(self):
         """Merge (left join) the full daily usage with the daily weather.
         Sum each by month: usage, HDDs, and days.
-        Include new column 'month' to indicate month (e.g. Jan = 1).
 
-                  dathm  HDD  days
-        month
-        5      2.724480  3.5    22
-        6      2.113821  0.0    27
-        6      0.371520  0.0     3
-        7      0.156579  0.0     2
+               meter_read       dathm    HDD  days
+        month                                     
+        1               5  391.334400  402.5    18
+        1               6  158.895750  190.0    13
+        1              17  506.970000  448.0    20
+        1              18  319.748000  314.5    11
+        2               4  202.129655  194.0    16
         """
-        daily = pd.DataFrame(self.usage_daily, columns=['dathm'])
+        daily = self.usage_daily
         merged = daily.merge(self.weather_daily, left_index=True, right_index=True)
-        merged.iloc[0]
         # gripm equally weights averages of two meter reads for one month
         # e.g. read A has daily average of 4 dathm per day and contains two days in February,
         #      read B has daily average of 16 dathm per day and contains 26 days in February,
         #      the response to HDD from two reads will equally affect the regression.
-        group = merged.groupby([merged.index.month, merged.dathm])
+        group = merged.groupby([merged.index.month, merged.meter_read])
         monthly = group.agg({'dathm': 'sum',
                              'HDD': 'sum',
                              'days': 'sum'})
-        # reset the first level ('month') so that it becomes it's own column
-        # then drop the remaining index (the 'dathm' we grouped by)
+        # reset the multi-index so that it becomes it's own columns
         # then rename the 'month' from the default 'level_0'
         # then set 'month' as the index
-        monthly = monthly.reset_index(level=0)\
-            .reset_index(drop=True)\
+        monthly = monthly.reset_index()\
             .rename(columns={'level_0': 'month'})\
             .set_index('month')
+        return monthly  # DataFrame
+
+    def _adjust_consumption(self):
+        monthly = self.usage_monthly
+        by_read = pd.DataFrame(monthly.groupby('meter_read')[['days', 'dathm', 'HDD']].sum())
+        by_read = by_read.rename(columns={'days':'read_days', 'dathm': 'read_dathm', 'HDD': 'read_HDD'})
+        monthly = monthly.merge(by_read, left_on='meter_read', right_index=True)
+        monthly['base_load'] = monthly.days * self.summer_base_load_per_day
+        monthly['HDD_portion'] = monthly.HDD / monthly.read_HDD
+        monthly.HDD_portion = monthly.HDD_portion.fillna(0)
+        monthly['heat_response'] = monthly.HDD_portion * (monthly.read_dathm - self.summer_base_load_per_day*monthly.read_days)
+        monthly.loc[monthly.heat_response < 0, 'heat_response'] = 0
+
+        # if base_load is less than dathm, use base_load
+        monthly['adj_dathm'] = monthly.dathm
+        base_less_than_dathm = monthly.dathm > monthly.base_load
+        monthly.loc[base_less_than_dathm, 'adj_dathm'] = monthly.loc[base_less_than_dathm, 'base_load']
+        # add heat response
+        monthly.adj_dathm += monthly.heat_response
+        # if read_HDD is not zero, then overwrite dathm
+        monthly.loc[monthly.read_HDD != 0, 'dathm'] = monthly.loc[monthly.read_HDD != 0, 'adj_dathm']
         return monthly
 
     def _weather2monthly(self):
-        """Prepare past weather data for prediction by grouping by month
+        """Prepare past weather data for prediction by grouping by month.
+        Will only keep the months in the trailing_months window
 
                       HDD  days  month
         Year Month
@@ -110,16 +138,26 @@ class SCARE:
         weather_monthly = weather_monthly['HDD', 'days'].sum()
         weather_monthly['month'] = [x[1] for x in weather_monthly.index]
         weather_monthly.index.names = ['Year', 'Month']
-        return weather_monthly
+
+        month_start = (self.trailing_months+1) * (-1)
+        month_end = -1  # do not include current month, since not complete
+        weather_monthly = weather_monthly.iloc[month_start:month_end]
+        return weather_monthly  # DataFrame
+
+    def _calculate_base_load(self):
+        summer = self.usage_monthly.loc[[7, 8]]
+        by_month = summer.groupby(summer.index).sum()
+        month_average = by_month.dathm / by_month.days
+        return month_average.mean()  # Float
 
     def piecewise(self, regression_type='two_piece'):
         """Piecewise Regression that segments different months"""
         # do four regressions with the following segmented months
         if regression_type == 'gripm':
-            segments = [[12, 1, 2],   # Dec-Feb
-                        [2, 3, 4],    # Feb-Apr
-                        [4, 10, 11],  # Apr,Oct,Nov
-                        [4, 5, 6, 9]]    # May,Jun,Sep
+            segments = [[12, 1, 2],    # Dec-Feb
+                        [2, 3, 4],     # Feb-Apr
+                        [4, 10, 11],   # Apr,Oct,Nov
+                        [4, 5, 6, 9]]  # May,Jun,Sep
             # assign the results of above segments to the following months
             assigns = [[12, 1, 2],
                        [3],
@@ -131,20 +169,21 @@ class SCARE:
             # assign the results of above segments to the following months
             assigns = segments
         else:
-            segments = [[12, 1, 2],        # Jan, Feb
+            segments = [[1, 2],        # Jan, Feb
                         [3, 4],        # Mar, Apr
                         [10, 11, 12],  # Oct-Dec
-                        [4, 5, 6, 9]]     # May, Jun, Sep
+                        [5, 6, 9]]     # May, Jun, Sep
             # assign the results of above segments to the following months
             assigns = [[12, 1, 2],
-                       [3, ],
-                       [4, 10, 11],
+                       [3, 4],
+                       [10, 11],
                        [5, 6, 7, 8, 9]]  # 7 and 8 replaced with actual daily averages
         prediction = pd.DataFrame()
         for i in range(len(segments)):
-            seg = self.usage_monthly.index.isin(segments[i])
-            lm = smf.ols("dathm~HDD+days+0", data=self.usage_monthly[seg]).fit()
-            # lm.summary()
+            seg = self.adjusted_usage_monthly.index.isin(segments[i])
+            lm = smf.ols("dathm~HDD+days+0", data=self.adjusted_usage_monthly[seg]).fit()
+            logging.debug('segments %s', segments[i])
+            logging.debug(lm.summary())
             seg_weather = self.weather_monthly.index.get_level_values("Month").isin(assigns[i])
             segment_prediction = lm.predict(self.weather_monthly[seg_weather])
             segment_prediction = pd.DataFrame(segment_prediction, columns=["dathm"])
@@ -176,11 +215,8 @@ class SCARE:
 
 
 def statistics(predictions, trailing_months=120, plot=False):
-    """Print the monthly Average across the recent requested number of months.
-    Will use the most recent months available, excluding current since incomplete"""
-    month_start = (trailing_months+1) * (-1)
-    month_end = -1  # do not include current month, since not complete
-    stats = predictions.iloc[month_start:month_end].groupby(level=1).mean()
+    """Print the monthly Average"""
+    stats = predictions.groupby(level=1).mean()
     stats = stats.rename(columns={"dathm": "Normalized"})
     return stats
 
@@ -200,9 +236,8 @@ def scare_result(weather, df, piecewise):
             # Statistics of recent 10 years
             stats = statistics(prediction, trailing_months=120)
             if piecewise:
-                # Pricing model replaces July (7) and August (8) with actual daily average
-                chg = obj.usage_daily
-                new = chg[(chg.index.month == 7) | (chg.index.month == 8)].mean()*31
+                # Pricing model replaces July (7) and August (8) base_load
+                new = obj.summer_base_load_per_day*31
                 stats.loc[7, 'Normalized'] = new
                 stats.loc[8, 'Normalized'] = new
             billing_annual_sum = obj.billing_averages().sum().iloc[0]

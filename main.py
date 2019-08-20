@@ -51,7 +51,7 @@ def pivot_table(df):
                     values='Normalized').astype(float)
 
 
-@timer
+@timer  # 29343.66sec
 def main(piecewise):
     reads = retrieve_reads()
     weather = retrieve_weather_and_clean(update_weather=False)
@@ -85,5 +85,5 @@ def test(piecewise):
 
 # res = test(piecewise=True)
 # res.to_csv('for_nic6.csv')
-real = main(True)
-real.to_csv('two_piece_full_run.csv')
+# real = main(True)
+# real.to_csv('two_piece_full_run.csv')
