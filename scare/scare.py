@@ -150,34 +150,18 @@ class SCARE:
         month_average = by_month.dathm / by_month.days
         return month_average.mean()  # Float
 
-    def piecewise(self, regression_type='two_piece'):
+    def regression(self):
         """Piecewise Regression that segments different months"""
         # do four regressions with the following segmented months
-        if regression_type == 'gripm':
-            segments = [[12, 1, 2],    # Dec-Feb
-                        [2, 3, 4],     # Feb-Apr
-                        [4, 10, 11],   # Apr,Oct,Nov
-                        [4, 5, 6, 9]]  # May,Jun,Sep
-            # assign the results of above segments to the following months
-            assigns = [[12, 1, 2],
-                       [3],
-                       [4, 10, 11],
-                       [5, 6, 7, 8, 9]]  # 7 and 8 replaced with actual daily averages
-        elif regression_type == 'two_piece':
-            segments = [[1, 2, 3, 4, 10, 11, 12],
-                        [5, 6, 7, 8, 9]]
-            # assign the results of above segments to the following months
-            assigns = segments
-        else:
-            segments = [[1, 2],        # Jan, Feb
-                        [3, 4],        # Mar, Apr
-                        [10, 11, 12],  # Oct-Dec
-                        [5, 6, 9]]     # May, Jun, Sep
-            # assign the results of above segments to the following months
-            assigns = [[12, 1, 2],
-                       [3, 4],
-                       [10, 11],
-                       [5, 6, 7, 8, 9]]  # 7 and 8 replaced with actual daily averages
+        segments = [[1, 2],        # Jan, Feb
+                    [3, 4],        # Mar, Apr
+                    [10, 11, 12],  # Oct-Dec
+                    [5, 6, 9]]     # May, Jun, Sep
+        # assign the results of above segments to the following months
+        assigns = [[12, 1, 2],
+                   [3, 4],
+                   [10, 11],
+                   [5, 6, 7, 8, 9]]  # 7 and 8 replaced with actual daily averages
         prediction = pd.DataFrame()
         for i in range(len(segments)):
             seg = self.adjusted_usage_monthly.index.isin(segments[i])
@@ -190,15 +174,6 @@ class SCARE:
             prediction = prediction.append(segment_prediction)
         prediction = prediction.sort_index()
         prediction[prediction < 0] = 0  # set negative predictions to zero
-        return prediction
-
-    def simple(self):
-        """Simple Regression on HDDs and days"""
-        lm = smf.ols("dathm~HDD+days+0", data=self.usage_monthly).fit()
-        # lm.summary()
-        prediction = lm.predict(self.weather_monthly)
-        prediction = pd.DataFrame(prediction, columns=["dathm"])
-        prediction.loc[prediction.dathm < 0, 'dathm'] = 0  # set negative predictions to zero
         return prediction
 
     def billing_averages(self):
@@ -221,7 +196,7 @@ def statistics(predictions, trailing_months=120, plot=False):
     return stats
 
 
-def scare_result(weather, df, piecewise):
+def scare_result(weather, df):
     using_billing = False
     total_days_of_reads = (df.EndDate - df.StartDate).sum().days
     if total_days_of_reads == 0:
@@ -229,17 +204,13 @@ def scare_result(weather, df, piecewise):
     else:
         obj = SCARE(weather, df=df)
         try:
-            if piecewise:
-                prediction = obj.piecewise()
-            else:
-                prediction = obj.simple()
+            prediction = obj.regression()
             # Statistics of recent 10 years
             stats = statistics(prediction, trailing_months=120)
-            if piecewise:
-                # Pricing model replaces July (7) and August (8) base_load
-                new = obj.summer_base_load_per_day*31
-                stats.loc[7, 'Normalized'] = new
-                stats.loc[8, 'Normalized'] = new
+            # Pricing model replaces July (7) and August (8) base_load
+            new = obj.summer_base_load_per_day*31
+            stats.loc[7, 'Normalized'] = new
+            stats.loc[8, 'Normalized'] = new
             billing_annual_sum = obj.billing_averages().sum().iloc[0]
             prediction_annual_sum = stats.Normalized.sum()
             if 0.3 < abs(1-(billing_annual_sum/prediction_annual_sum)):

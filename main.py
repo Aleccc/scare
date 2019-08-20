@@ -39,8 +39,8 @@ def retrieve_weather_and_clean(update_weather=False):
 
 
 @timer
-def calculate_results(reads, weather, piecewise, group_by='agl_premise_number'):
-    return reads.groupby(group_by).apply(lambda x: scare_result(weather=weather, df=x, piecewise=piecewise))
+def calculate_results(reads, weather, group_by='agl_premise_number'):
+    return reads.groupby(group_by).apply(lambda x: scare_result(weather=weather, df=x))
 
 
 @timer
@@ -52,18 +52,18 @@ def pivot_table(df):
 
 
 @timer  # 29343.66sec
-def main(piecewise):
+def main():
     reads = retrieve_reads()
     weather = retrieve_weather_and_clean(update_weather=False)
     reads = reads.rename(columns={'ccf': 'UsgCCF',
                                   'begin_date': 'StartDate',
                                   'end_date': 'EndDate'})
-    grouped_results = calculate_results(reads, weather, piecewise=piecewise, group_by='agl_premise_number')
+    grouped_results = calculate_results(reads, weather, group_by='agl_premise_number')
     df = pivot_table(grouped_results)
     return df
 
 
-def test(piecewise):
+def test():
     weather = retrieve_weather_and_clean()
     # reads = retrieve_reads()
     reads = pd.read_csv('reads.csv')
@@ -78,12 +78,12 @@ def test(piecewise):
                                   'end_date': 'EndDate'})
 
     these = reads.merge(nic, left_on='agl_premise_number', right_on='agl_premise_number')
-    grouped_results = calculate_results(these, weather, piecewise=piecewise, group_by='agl_premise_number')
+    grouped_results = calculate_results(these, weather, group_by='agl_premise_number')
     df = pivot_table(grouped_results)
     return df
 
 
-# res = test(piecewise=True)
+# res = test()
 # res.to_csv('for_nic6.csv')
-# real = main(True)
+# real = main()
 # real.to_csv('two_piece_full_run.csv')
