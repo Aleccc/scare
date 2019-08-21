@@ -95,7 +95,7 @@ class SCARE:
     def _adjust_consumption(self):
         monthly = self.usage_monthly
         by_read = pd.DataFrame(monthly.groupby('meter_read')[['days', 'dathm', 'HDD']].sum())
-        by_read = by_read.rename(columns={'days':'read_days', 'dathm': 'read_dathm', 'HDD': 'read_HDD'})
+        by_read = by_read.rename(columns={'days': 'read_days', 'dathm': 'read_dathm', 'HDD': 'read_HDD'})
         monthly = monthly.merge(by_read, left_on='meter_read', right_index=True)
         monthly['base_load'] = monthly.days * self.summer_base_load_per_day
         monthly['HDD_portion'] = monthly.HDD / monthly.read_HDD
@@ -145,10 +145,13 @@ class SCARE:
         return weather_monthly  # DataFrame
 
     def _calculate_base_load(self):
-        summer = self.usage_monthly.loc[[7, 8]]
-        by_month = summer.groupby(summer.index).sum()
-        month_average = by_month.dathm / by_month.days
-        return month_average.mean()  # Float
+        try:
+            summer = self.usage_monthly.loc[[7, 8]]
+            by_month = summer.groupby(summer.index).sum()
+            month_average = by_month.dathm / by_month.days
+            return month_average.mean()  # Float
+        except KeyError:  # "None of [Int64Index([7, 8], dtype='int64', name='month')] are in the [index]"
+            return 0
 
     def regression(self):
         """Piecewise Regression that segments different months"""
@@ -189,7 +192,7 @@ class SCARE:
         return billing_average
 
 
-def statistics(predictions, trailing_months=120, plot=False):
+def statistics(predictions):
     """Print the monthly Average"""
     stats = predictions.groupby(level=1).mean()
     stats = stats.rename(columns={"dathm": "Normalized"})
@@ -197,16 +200,17 @@ def statistics(predictions, trailing_months=120, plot=False):
 
 
 def scare_result(weather, df):
-    using_billing = False
+    using_scare = True
     total_days_of_reads = (df.EndDate - df.StartDate).sum().days
     if total_days_of_reads == 0:
         stats = pd.DataFrame.from_dict({'Normalized': [None, ]})
+        using_scare = False
     else:
         obj = SCARE(weather, df=df)
         try:
             prediction = obj.regression()
             # Statistics of recent 10 years
-            stats = statistics(prediction, trailing_months=120)
+            stats = statistics(prediction)
             # Pricing model replaces July (7) and August (8) base_load
             new = obj.summer_base_load_per_day*31
             stats.loc[7, 'Normalized'] = new
@@ -217,15 +221,15 @@ def scare_result(weather, df):
                 # if the absolute difference between the prediction and billing loads
                 # are greater than 30%, then use the billing load
                 stats = obj.billing_averages()
-                using_billing = True
+                using_scare = False
         except ValueError:
             stats = obj.billing_averages()
-            using_billing = True
+            using_scare = False
 
     checks = pd.DataFrame.from_dict({'check': ['test1', 'test2', 'test3',
-                                               'using_billing', 'read_count'],
+                                               'using_scare', 'read_count'],
                                      'Normalized': [test_one(stats), test_two(stats), test_three(stats),
-                                                    using_billing, len(df)],
+                                                    using_scare, len(df)],
                                      })
     checks = checks.set_index('check')
     stats = stats.append(checks)

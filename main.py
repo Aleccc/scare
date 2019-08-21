@@ -84,6 +84,6 @@ def test():
 
 
 # res = test()
-# res.to_csv('for_nic6.csv')
-# real = main()
-# real.to_csv('two_piece_full_run.csv')
+# res.to_csv('for_nic7.csv')
+real = main()
+real.to_csv('perfect_full_run.csv')
