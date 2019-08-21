@@ -200,7 +200,6 @@ def statistics(predictions):
 
 
 def scare_result(weather, df):
-    # print(df)
     using_scare = True
     total_days_of_reads = (df.EndDate - df.StartDate).sum().days
     if total_days_of_reads == 0:
@@ -234,5 +233,4 @@ def scare_result(weather, df):
                                      })
     checks = checks.set_index('check')
     stats = stats.append(checks)
-    # print(stats)
     return stats
