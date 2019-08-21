@@ -40,9 +40,6 @@ def retrieve_weather_and_clean(update_weather=False):
     return weather
 
 
-WEATHER = retrieve_weather_and_clean()
-
-
 @timer
 def calculate_results(reads, weather, group_by='agl_premise_number'):
     return reads.groupby(group_by).apply(lambda x: scare_result(weather=weather, df=x))
@@ -68,39 +65,28 @@ def main(reads_from_file=True):
         reads.begin_date = pd.to_datetime(reads.begin_date)
         reads.end_date = pd.to_datetime(reads.end_date)
         reads.ccf = pd.to_numeric(reads.ccf)
+
+        premises = list(set(reads.agl_premise_number))[:1000]
+        reads = reads[reads.agl_premise_number.isin(premises)]
     else:
         reads = retrieve_reads()
     reads = reads.rename(columns={'ccf': 'UsgCCF',
                                   'begin_date': 'StartDate',
                                   'end_date': 'EndDate'})
-    readds = dd.from_pandas(reads, npartitions=16)  # partitions fastest at 2xCores
+    readds = dd.from_pandas(reads, npartitions=8)
     expected = pd.DataFrame(columns=['Normalized', ], dtype=float)
-    results = readds.groupby('agl_premise_number').apply(func_for_dask, meta=expected).compute(num_workers=1)
+    results = readds.groupby('agl_premise_number').apply(func_for_dask, meta=expected).compute(scheduler='processes')
     df = pivot_table(results)
     return df
 
 
-def test():
-    weather = retrieve_weather_and_clean()
-    # reads = retrieve_reads()
-    reads = pd.read_csv('reads.csv')
-    nic = pd.read_csv('nic.csv')
-    nic.agl_premise_number = pd.to_numeric(nic.agl_premise_number)
-    reads.agl_premise_number = pd.to_numeric(reads.agl_premise_number)
-    reads.begin_date = pd.to_datetime(reads.begin_date)
-    reads.end_date = pd.to_datetime(reads.end_date)
-    reads.ccf = pd.to_numeric(reads.ccf)
-    reads = reads.rename(columns={'ccf': 'UsgCCF',
-                                  'begin_date': 'StartDate',
-                                  'end_date': 'EndDate'})
+if __name__ == "__main__":
+    WEATHER = retrieve_weather_and_clean()
+    real = main(reads_from_file=True)
+    # real.to_csv('multi_full_run.csv')
 
-    these = reads.merge(nic, left_on='agl_premise_number', right_on='agl_premise_number')
-    grouped_results = calculate_results(these, weather, group_by='agl_premise_number')
-    df = pivot_table(grouped_results)
-    return df
-
-
-# res = test()
-# res.to_csv('for_nic7.csv')
-real = main(reads_from_file=True)
-real.to_csv('multi_full_run.csv')
+    # premises = 1000, pandas apply: 193.72
+    # premises = 1000, n = 4, processes: 78.15
+    # premises = 1000, n = 6, processes: 74.79
+    # premises = 1000, n = 8, processes: 74.45
+    # premises = 1000, n = 16, processes: 83.71
