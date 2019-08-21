@@ -68,10 +68,6 @@ def main(reads_from_file=True):
         reads.begin_date = pd.to_datetime(reads.begin_date)
         reads.end_date = pd.to_datetime(reads.end_date)
         reads.ccf = pd.to_numeric(reads.ccf)
-
-        nic = pd.read_csv('nic.csv')
-        nic.agl_premise_number = pd.to_numeric(nic.agl_premise_number)
-        reads = reads.merge(nic, left_on='agl_premise_number', right_on='agl_premise_number')
     else:
         reads = retrieve_reads()
     reads = reads.rename(columns={'ccf': 'UsgCCF',
