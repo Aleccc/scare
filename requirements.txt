@@ -1,5 +1,6 @@
 certifi==2019.6.16
 chardet==3.0.4
+dask==2.3.0
 idna==2.8
 numpy==1.17.0
 pandas==0.25.0
