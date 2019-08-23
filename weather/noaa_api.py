@@ -11,6 +11,7 @@ import os
 import csv
 import datetime
 import requests
+import pandas as pd
 
 STATIC_WEATHER = os.path.join('weather', 'static', 'weather.csv')
 STR_FORMAT = '%Y-%m-%d'
@@ -66,7 +67,19 @@ def append_data(response):
         writer.writerows(response)
 
 
-def get_data(update_weather=False):
+def _calculate_hdd(data):
+    weather = pd.DataFrame.from_dict(data)
+    weather.DATE = pd.to_datetime(weather.DATE, format='%Y-%m-%d')
+    weather.TMAX = pd.to_numeric(weather.TMAX)
+    weather.TMIN = pd.to_numeric(weather.TMIN)
+    weather['HDD'] = 65 - ((weather.TMAX + weather.TMIN) / 2)
+    weather.loc[weather.HDD < 0, 'HDD'] = 0
+    weather['days'] = 1
+    weather = weather.set_index(weather.DATE, drop=True)
+    return weather
+
+
+def get_weather(update_weather=False):
     data = get_static_data()
     if update_weather:
         try:
@@ -86,4 +99,4 @@ def get_data(update_weather=False):
             json_response = call_api()
             append_data(json_response)
             data = get_static_data()
-    return data
+    return _calculate_hdd(data)

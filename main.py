@@ -2,7 +2,7 @@ import pandas as pd
 import dask.dataframe as dd
 
 from datawarehouse.queries import query_premises
-from weather.noaa_api import get_data
+from weather.noaa_api import get_weather
 from scare.scare import scare_result
 from timer.timer import timer
 
@@ -26,18 +26,20 @@ def retrieve_reads():
 
 
 @timer
-def retrieve_weather_and_clean(update_weather=False):
-    """retrieve_weather_and_clean time: 0.08sec"""
-    weather = get_data(update_weather=update_weather)
-    weather = pd.DataFrame.from_dict(weather)
-    weather.DATE = pd.to_datetime(weather.DATE, format='%Y-%m-%d')
-    weather.TMAX = pd.to_numeric(weather.TMAX)
-    weather.TMIN = pd.to_numeric(weather.TMIN)
-    weather['HDD'] = 65 - ((weather.TMAX + weather.TMIN) / 2)
-    weather.loc[weather.HDD < 0, 'HDD'] = 0
-    weather['days'] = 1
-    weather = weather.set_index(weather.DATE, drop=True)
-    return weather
+def retrieve_reads_from_file(filter_top_n=None):
+    reads = pd.read_csv('reads.csv')
+    reads.agl_premise_number = pd.to_numeric(reads.agl_premise_number)
+    reads.begin_date = pd.to_datetime(reads.begin_date)
+    reads.end_date = pd.to_datetime(reads.end_date)
+    reads.ccf = pd.to_numeric(reads.ccf)
+
+    if filter_top_n:
+        try:
+            premises = list(set(reads.agl_premise_number))[:filter_top_n]
+            reads = reads[reads.agl_premise_number.isin(premises)]
+        except TypeError as e:
+            print('Type Error: filter_top_n must be an integer')
+    return reads
 
 
 @timer
@@ -58,21 +60,7 @@ def func_for_dask(df):
 
 
 @timer  # 29343.66sec
-def main(reads_from_file=True):
-    if reads_from_file:
-        reads = pd.read_csv('reads.csv')
-        reads.agl_premise_number = pd.to_numeric(reads.agl_premise_number)
-        reads.begin_date = pd.to_datetime(reads.begin_date)
-        reads.end_date = pd.to_datetime(reads.end_date)
-        reads.ccf = pd.to_numeric(reads.ccf)
-
-        premises = list(set(reads.agl_premise_number))[:1000]
-        reads = reads[reads.agl_premise_number.isin(premises)]
-    else:
-        reads = retrieve_reads()
-    reads = reads.rename(columns={'ccf': 'UsgCCF',
-                                  'begin_date': 'StartDate',
-                                  'end_date': 'EndDate'})
+def main(reads):
     readds = dd.from_pandas(reads, npartitions=8)
     expected = pd.DataFrame(columns=['Normalized', ], dtype=float)
     results = readds.groupby('agl_premise_number').apply(func_for_dask, meta=expected).compute(scheduler='processes')
@@ -81,8 +69,16 @@ def main(reads_from_file=True):
 
 
 if __name__ == "__main__":
-    WEATHER = retrieve_weather_and_clean()
-    real = main(reads_from_file=True)
+    WEATHER = get_weather(update_weather=True)
+    READ_FROM_FILE = True
+    if READ_FROM_FILE:
+        all_reads = retrieve_reads_from_file(filter_top_n=1000)
+    else:
+        all_reads = retrieve_reads()
+    all_reads = all_reads.rename(columns={'ccf': 'UsgCCF',
+                                          'begin_date': 'StartDate',
+                                          'end_date': 'EndDate'})
+    real = main(all_reads)
     # real.to_csv('multi_full_run.csv')
 
     # premises = 1000, pandas apply: 193.72
